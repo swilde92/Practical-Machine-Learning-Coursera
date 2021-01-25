@@ -1,0 +1,129 @@
+---
+title: "Classification model for weight lifting"
+author: "SarahLynn"
+date: "1/24/2021"
+output:
+  html_document:
+    df_print: paged
+---
+  
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(dplyr)
+library(readr)
+library(caret)
+library(parallel)
+library(doParallel)
+```
+
+## Overview
+
+In this project, we explore a HAR (human activity recognition) dataset to see if we can tell, from data collected with motion sensors, if an individual is performing a weight lifting task correctly. The model is built with optimal accuracy in mind, and approaches are employed to optimize computational efficiency and run time. In the end, we have a model with 98.69% accuracy. 
+
+## Load, Clean, and Explore the Data
+
+To start, we'll read in the data and check for any missing values or outliers. 
+
+```{r load_clean1, echo=TRUE, results=FALSE,message=FALSE, warning=FALSE}
+training_raw <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+testing_raw <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+##check for nulls or missing data
+sapply(training_raw,function(x) sum(is.na(x)))
+sapply(training_raw,function(x) sum(is.null(x)))
+
+##remove columns that are all NAs
+trainingFULL<-training_raw[,-which(sapply(training_raw,function(x) sum(is.na(x)))>0)]
+testing<-testing_raw[,-which(sapply(training_raw,function(x) sum(is.na(x)))>0)]
+```
+
+Having cleaned the data, next we will split into a traning and test set. The test set that already exists will be the final testing set. The test set created below will be used for model iterations if needed. Since we have almost 20k observations, we aren't worried about splitting the data this many times.
+
+```{r testtrainsplit, echo=TRUE, results=TRUE,message=FALSE, warning=FALSE}
+set.seed(11)
+inTrain <- createDataPartition(trainingFULL$classe, p = 3/4,list=FALSE)
+training <- as.data.frame(trainingFULL[ inTrain,])
+testing <- as.data.frame(trainingFULL[-inTrain,])
+```
+
+Next we will do some EDA to explore the normality of the data in preparation to build our model. We spot check this by looking at a few histograms. Some look reasonably normal while others dont. Either way, since we have so many predictors (159) we will be doing PCA below to reduce the run time for fitting the model. When PCA is done using the caret package, it automatically centers and scales 
+the predictors if needed, so this will address any normality issues as well.
+
+```{r eda, echo=TRUE, results=TRUE, warning=FALSE,out.width="90%",fig.align = 'center'}
+par(mfrow=c(2,3))
+hist(training[,10],main=names(training)[10])
+hist(training[,15],main=names(training)[15])
+hist(training[,20],main=names(training)[20])
+hist(training[,25],main=names(training)[25])
+hist(training[,30],main=names(training)[25])
+hist(training[,35],main=names(training)[35])
+
+par(mfrow=c(2,3))
+hist(training[,36],main=names(training)[36])
+hist(training[,40],main=names(training)[40])
+hist(training[,45],main=names(training)[45])
+hist(training[,50],main=names(training)[50])
+hist(training[,55],main=names(training)[55])
+hist(training[,59],main=names(training)[59])
+```
+
+## Fit the Model
+We have selected a random forest classifier here since it generally has the highest accuracy, and we can run it as long as we've reduced the predictors (PCA) with a 90% threshold and set R up to run on parallel cores. We've also decided to use k-fold cross validation to try to balance the risks of overfitting and model bias. We've selected 10 as the highest number we can reasonably do without too long of run times. k-fold is appropriate here since we have plenty of data. We do all this using the caret package. 
+```{r modfit, echo=TRUE, results=TRUE,message=FALSE, warning=FALSE}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+rfFit1 <- train(classe~.,method="rf",data=training,
+               preProcess="pca", trControl = trainControl(preProcOptions = list(thresh = 0.9)
+                                                          ,method = "repeatedcv", number = 10))
+
+stopCluster(cluster)
+registerDoSEQ()
+``` 
+
+Now that we have our model fit, we can look at the accuracy of it's classifications (looking out for any systemic issues or bias in classifying). We will do this using the testing data set we set aside before.
+
+
+```{r eval, echo=TRUE, results=TRUE,message=FALSE, warning=FALSE,out.width="90%",fig.align = 'center'}
+Pred1 <- predict(rfFit1,testing)
+t1<- table(factor(Pred1, levels=c("A","B","C","D","E")), 
+      factor(testing$classe, levels=c("A","B","C","D","E")))
+confusionMatrix(t1)$overall[1]
+par(mfrow=c(1,1))
+plot(t1, col = confusionMatrix(t1)$byClass, main = paste("Random Forest Accuracy")) 
+```
+
+The output shows an accuracy of 98.69%. The plot shows visually where the errors are occuring. They seem well balanced between all the classes. 
+
+Given this high accuracy, we'll fit another type of model just for comparisons sake to see if the accuracy is better. Next we'll try a boosted model, since it also uses bagging, like random forst, but it penalizes mistakes as it creates its trees. 
+
+```{r modfit2, echo=TRUE, results=TRUE,message=FALSE, warning=FALSE}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+rfFit2 <- train(classe~.,method="gbm",data=training,
+               preProcess="pca", trControl = trainControl(preProcOptions = list(thresh = 0.9)
+                                                          ,method = "repeatedcv", number = 10))
+
+stopCluster(cluster)
+registerDoSEQ()
+``` 
+
+Now we will evaluate the accuracy of the boosted model to see how it compares with random forest.
+
+```{r eval2, echo=TRUE, results=TRUE,message=FALSE, warning=FALSE,out.width="90%",fig.align = 'center'}
+Pred2 <- predict(rfFit2,testing)
+t2<- table(factor(Pred2, levels=c("A","B","C","D","E")), 
+      factor(testing$classe, levels=c("A","B","C","D","E")))
+confusionMatrix(t2)$overall[1]
+par(mfrow=c(1,1))
+plot(t2, col = confusionMatrix(t2)$byClass, main = paste("Boosted Tree Accuracy")) 
+```
+
+The accuracy of the boosted model is still decent at 93.03%, but not as good as our random forest model. Hence we will use the random forest model as our final model and apply it to the original test set for our final predictions. 
+
+```{r preds, echo=TRUE, results=TRUE,message=FALSE, warning=FALSE}
+PredFinal <- predict(rfFit1,testing_raw)
+PredFinal
+```
